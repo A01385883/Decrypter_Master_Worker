@@ -1,9 +1,3 @@
-"""
-Prueba mínima de conectividad -- lado worker.
-Uso: python3 test_worker.py <IP_DEL_MASTER>
-Si no das IP, intenta 127.0.0.1 (prueba local).
-"""
-
 import socket
 import sys
 
@@ -11,7 +5,7 @@ PORT = 65432
 
 
 def iniciar_worker_prueba() -> None:
-    master_host = sys.argv[1] if len(sys.argv) > 1 else '10.117.151.213'
+    master_host = sys.argv[1] if len(sys.argv) > 1 else '10.117.151.200'
     print(f"[WORKER-TEST] Intentando conectar a {master_host}:{PORT}...")
 
     try:
