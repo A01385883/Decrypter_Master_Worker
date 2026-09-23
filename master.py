@@ -18,6 +18,8 @@ import queue
 import json
 import argparse
 
+from typing import List, Tuple
+
 def recv_message(conn):
     """Read one newline-delimited JSON message from the socket."""
     data = b""
@@ -31,7 +33,8 @@ def recv_message(conn):
 def send_message(conn, obj):
     conn.sendall((json.dumps(obj) + "\n").encode())
 
-def worker_handler(conn, addr, task_queue, results, results_lock):
+# SEARCH: Master's handling of workers occurs here.
+def worker_handler(conn: socket.socket, addr, task_queue: queue.Queue, results, results_lock):
     try:
         while True:
             try:
@@ -40,14 +43,13 @@ def worker_handler(conn, addr, task_queue, results, results_lock):
                 break  # no more work left for this worker
 
             send_message(conn, task)
-
             result = recv_message(conn)
+
             if result is None:
                 print(f"[MASTER] Worker {addr} disconnected unexpectedly")
                 # put the task back so another worker (or a retry) can do it
                 task_queue.put(task)
                 return
-
             with results_lock:
                 results.append(result)
             print(f"[MASTER] Result from {addr} -> task {task['task_id']}: {result['result']}")
@@ -58,8 +60,8 @@ def worker_handler(conn, addr, task_queue, results, results_lock):
         conn.close()
         print(f"[MASTER] Connection to {addr} closed")
 
-
-def main():
+def run_master():
+    # For debugging and manual set up of the program's options.
     parser = argparse.ArgumentParser(description="Master node: distributes tasks to workers")
     parser.add_argument("--host", default="0.0.0.0", help="Interface to bind on (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=5000, help="Port to listen on (default: 5000)")
@@ -79,31 +81,35 @@ def main():
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((args.host, args.port))
     server.listen(args.num_workers)
+
     print(f"[MASTER] Listening on {args.host}:{args.port}")
     print(f"[MASTER] Waiting for {args.num_workers} worker(s) to connect...")
 
     # Accept every expected worker BEFORE starting to hand out any tasks,
     # so no worker gets a head start on the others.
-    connections = []
+    connections: List[Tuple[socket.socket, socket._RetAddress]] = []
     for _ in range(args.num_workers):
+        # Wait for worker's incomming connection.
         conn, addr = server.accept()
         connections.append((conn, addr))
         print(f"[MASTER] Worker connected from {addr} ({len(connections)}/{args.num_workers})")
 
     print("[MASTER] All workers connected. Starting task distribution.\n")
 
-    threads = []
+    # PENDING: Handle downed workers and task reassignment.
+    threads: List[threading.Thread] = []
     for conn, addr in connections:
         t = threading.Thread(
             target=worker_handler,
             args=(conn, addr, task_queue, results, results_lock),
             daemon=True,
         )
+
         t.start()
         threads.append(t)
 
-    for t in threads:
-        t.join()
+    # Awaits threads to finish (Kinda)
+    for t in threads: t.join()
 
     print("\n[MASTER] All workers finished. Results:")
     for r in sorted(results, key=lambda x: x["task_id"]):
@@ -111,6 +117,5 @@ def main():
 
     server.close()
 
-
 if __name__ == "__main__":
-    main()
+    run_master()

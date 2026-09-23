@@ -1,7 +1,14 @@
 # Decrypter_Master_Worker
 ### Versión de Ilan
 
+**Features:**
+- El servidor master puede ser programado para esperar a que **n** cantidad de workers establezcan conexión con él para inicilizar la repartición de tareas.
 
+**Tareas Pendientes (!):**
+
+- Mejorar el algóritmo de Load Balancing para distribución de tasks entre los diferentes workers.
+
+- Implementar un método de reasignación de tareas una vez que uno de los workers se tumbe en la mitad de distribución y ejecución de tareas.
 
 ## Metodología:
 
@@ -22,3 +29,4 @@ Argumentos aceptados por: ```master.py```
 --host IP_ADDR # 
 --port PORT    # Puerto del host MASTER
 ```
+

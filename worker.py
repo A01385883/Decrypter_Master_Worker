@@ -14,7 +14,10 @@ import argparse
 import time
 import random
 
-def recv_message(sock):
+from typing import List, Tuple, Any
+
+# FIX: Ambiguous return value type.
+def recv_message(sock: socket.socket) -> Any:
     data = b""
     while not data.endswith(b"\n"):
         chunk = sock.recv(4096)
@@ -23,10 +26,13 @@ def recv_message(sock):
         data += chunk
     return json.loads(data.decode())
 
-def send_message(sock, obj):
+# FIX: Ambiguous sent 'obj' type, can define through pydantic or .
+def send_message(sock: socket.socket, obj: Any):
     sock.sendall((json.dumps(obj) + "\n").encode())
 
-def simulate_task(payload):
+# PENDING: Task assigned to solve goes here. Implement the Brute-force solution.
+# FIX: Ambiguous return value type.
+def simulate_task(payload: Any):
     """Placeholder for real work. Swap this out for your actual computation."""
     time.sleep(random.uniform(0.5, 2.0))
     return payload ** 2
@@ -37,7 +43,7 @@ def main():
     parser.add_argument("--port", type=int, default=5000, help="Master's port (default: 5000)")
     args = parser.parse_args()
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     print(f"[WORKER] Connecting to master at {args.host}:{args.port} ...")
     sock.connect((args.host, args.port))
     print("[WORKER] Connected. Waiting for tasks...")
