@@ -11,10 +11,6 @@ import socket
 import argparse
 
 
-HOST = '127.0.0.1'
-PORT = 65432
-
-
 def calcular_hash_hmac(mensaje_bytes: bytes, clave_bytes: bytes) -> str:
     """Calcula el hash HMAC-MD5 para un mensaje y clave dados."""
     return hmac.new(clave_bytes, mensaje_bytes, hashlib.md5).hexdigest()

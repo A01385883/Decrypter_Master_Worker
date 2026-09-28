@@ -14,9 +14,7 @@ import time
 import argparse
 
 
-HOST = '127.0.0.1'
-PORT = 65432
-TIMEOUT_TAREA_SEGUNDOS = 10.0
+TIMEOUT_TAREA_SEGUNDOS = 30.0
 
 
 def calcular_hash_hmac(mensaje_bytes: bytes, clave_bytes: bytes) -> str:
