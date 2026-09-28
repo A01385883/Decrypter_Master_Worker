@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import socket
+import argparse
 
 
 HOST = '127.0.0.1'
@@ -34,9 +35,15 @@ def procesar_tarea(mensaje_rip_bytes: bytes, hash_real: str, inicio: int, fin: i
 
 def iniciar_worker() -> None:
     """Mantiene la conexión activa con el Master procesando bloques de tareas recibidos."""
+    parser = argparse.ArgumentParser(description="Worker node: processes tasks from the master")
+    parser.add_argument("--host", required=True, help="Master's IP address")
+    parser.add_argument("--port", type=int, default=5000, help="Master's port (default: 5000)")
+    args = parser.parse_args()
+
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as cliente:
-            cliente.connect((HOST, PORT))
+            print(f"[WORKER] Connecting to master at {args.host}:{args.port} ...")
+            cliente.connect((args.host, args.port))
             print("[WORKER] Conectado al Master.")
 
             while True:

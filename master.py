@@ -11,6 +11,7 @@ import queue
 import socket
 import threading
 import time
+import argparse
 
 
 HOST = '127.0.0.1'
@@ -118,7 +119,7 @@ def manejar_worker_remoto(
 
             try:
                 conn.sendall(json.dumps(payload).encode('utf-8'))
-                data = conn.recv(1024)
+                data = conn.recv(4096)
 
                 if not data:
                     raise ConnectionError("Worker se desconectó inesperadamente.")
@@ -183,6 +184,11 @@ def iniciar_master() -> None:
     clave_temporal = bytes.fromhex("a1b2c3")
     hash_real = calcular_hash_hmac(mensaje_rip, clave_temporal)
 
+    parser = argparse.ArgumentParser(description="Master node: distributes tasks to workers")
+    parser.add_argument("--host", default="0.0.0.0", help="Interface to bind on (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=5000, help="Port to listen on (default: 5000)")
+    args = parser.parse_args()
+
     total_combinaciones = 16**6
     num_bloques = 12
     cola_tareas = generar_cola_tareas(total_combinaciones, num_bloques)
@@ -194,10 +200,11 @@ def iniciar_master() -> None:
 
     servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     servidor.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    servidor.bind((HOST, PORT))
+    servidor.bind((args.host, args.port))
     servidor.listen()
     servidor.settimeout(1.0)
-    print(f"[MASTER] Escuchando en {HOST}:{PORT}...")
+
+    print(f"[MASTER] Listening on {args.host}:{args.port}")
 
     hilos = []
 
