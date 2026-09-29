@@ -12,13 +12,184 @@ Find this machine's LAN IP (e.g. with `ip addr` / `ifconfig` / `ipconfig`)
 and give that IP to the workers.
 """
 
+import sys
 import socket
-import threading
+
 import queue
 import json
 import argparse
 
-from typing import List, Tuple
+import selectors
+import asyncio
+import threading
+
+import time
+
+# Type Enforcement
+from collections.abc import Collection, Callable
+from typing import List, Tuple, Dict, Annotated
+
+from enum import Enum
+from dataclasses import dataclass, field
+
+# Colored-Logging for clear debugging. 
+
+class Tcolors():
+    CYAN = '\033[96m'
+    MAGENTA = '\033[95m'
+    BLUE = '\033[94m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    ENDC = '\033[0m'
+
+class LogPriority(Enum):
+    DEBG = "debug" 
+    INFO = "info"
+    WARN = "warn"
+    ERR  = "error"
+
+# Worker socket conn. state.
+
+class ConnState(Enum):
+    IDLE      = "idle"
+    BUSY      = "busy"
+
+# Entities config.
+
+@dataclass
+class NetConfig:
+    host: str
+    port: int
+
+@dataclass
+class Worker:
+    worker_id: str
+    writer: asyncio.StreamWriter
+
+# SECTION --- MASTER NODE
+
+class MasterNode:
+    def __init__(self, mhost_, mport_, nworkers_: int, ntasks_: int):
+        self.net_config = NetConfig(host=mhost_, port=mport_)
+
+        # Save tasks
+        self.task_queue = asyncio.Queue(ntasks_)
+
+        # PENDING Worker instances 
+        self.workers = dict()
+
+    def log_master(self, msg_: str, priority_ = LogPriority.INFO) -> None:
+            e_name = "MASTER"
+            if priority_ == LogPriority.ERR:
+                print(f"{Tcolors.RED}[{e_name}] (Err) {msg_}{Tcolors.ENDC}")
+            elif priority_ == LogPriority.WARN:
+                print(f"{Tcolors.YELLOW}[{e_name}] (Warn) {msg_}{Tcolors.ENDC}")
+            elif priority_ == LogPriority.DEBG:
+                print(f"{Tcolors.MAGENTA}[{e_name}] (Debug) {msg_}{Tcolors.ENDC}")
+            else:
+                print(f"[{e_name}] (Info) {msg_}")
+
+    def info(self) -> None:
+        print(f"\n===== START MASTER NODE INFO =====\n")
+        print(f"Addr: {self.net_config.host}:{str(self.net_config.port)}")
+        print(f"Cap : {len(self.workers)}")
+        print(f"\n===== END MASTER NODE INFO =====\n")
+
+    async def add_task(self, task: Dict[str, int]) -> None:
+        await self.task_queue.put(task)
+
+    # With asynchronicity
+    async def handle_worker(self, r: asyncio.StreamReader, w: asyncio.StreamWriter):
+        address = w.get_extra_info("peername")
+        self.log_master(f"Worker Connected: {address}", LogPriority.DEBG)
+
+        # Implement a registration method for the worker.
+
+        # worker_id = (await r.readline()).decode().strip()
+
+        # self.workers[worker_id] = Worker(
+        #     worker_id=worker_id,
+        #     writer=w,
+        # )
+
+        try:
+            while True or not self.task_queue.empty():
+                # Receive echo message from worker to confirm conn. 
+                data = await r.read(4096)
+
+                # Client disconnection
+                if not data:
+                    break
+
+                self.log_master(f"Received from {address}: {data.decode('utf-8')}")
+
+                # task = await self.task_queue.get()
+                # self.log_master(f"Sending task {task} to {address}", LogPriority.INFO)
+
+        except (ConnectionResetError, BrokenPipeError):
+            self.log_master(
+                # f"{worker_id} had an error, it was disconnected.", 
+                f"{address} had an error, forcefully disconnected",
+                LogPriority.ERR
+            )
+        finally:
+            self.log_master(
+                f"{address} has disconnected",
+                LogPriority.WARN
+            )
+
+            # self.workers.pop(worker_id, None)
+            w.close()
+            await w.wait_closed()
+
+    async def run_server(self) -> None:
+        server = await asyncio.start_server(
+            self.handle_worker, 
+            self.net_config.host, 
+            self.net_config.port
+        )
+
+        addr = server.sockets[0].getsockname()
+        self.log_master(f"Serving on {addr}", LogPriority.DEBG)
+
+        await master.add_task({ "Root" : 441 })
+        await master.add_task({ "Root" : 484 })
+        await master.add_task({ "Root" : 169 })
+
+        try:
+            async with server:
+                await server.serve_forever()
+        except Exception as e:
+            self.log_master(f"Error ocurred within server runtime: {e}", LogPriority.ERR)
+            sys.exit(1)
+        finally:
+            self.log_master("Server has closed.", LogPriority.WARN)
+
+# Function to create a new MasterNode instance.
+def create_master() -> MasterNode:
+    parser = argparse.ArgumentParser(description="Task distribution node")
+
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=5000)
+    parser.add_argument("--num-tasks", type=int, default=12)
+    parser.add_argument("--num-workers", type=int, default=3)
+
+    args = parser.parse_args()
+
+    return MasterNode(
+        mhost_=args.host,
+        mport_=args.port,
+        nworkers_=args.num_workers,
+        ntasks_=args.num_tasks
+    )
+
+# On execution.
+if __name__ == '__main__':
+    master = create_master()
+    master.info()
+
+    asyncio.run(master.run_server())
 
 def recv_message(conn):
     """Read one newline-delimited JSON message from the socket."""
@@ -52,6 +223,7 @@ def worker_handler(conn: socket.socket, addr, task_queue: queue.Queue, results, 
                 return
             with results_lock:
                 results.append(result)
+
             print(f"[MASTER] Result from {addr} -> task {task['task_id']}: {result['result']}")
 
         # No more tasks: tell the worker it's done
@@ -71,7 +243,10 @@ def run_master():
 
     # Build the task queue. Replace this with whatever real work items you need.
     task_queue = queue.Queue()
-    for i in range(args.num_tasks):
+
+    amount_of_tasks: int = args.num_tasks
+
+    for i in range(amount_of_tasks):
         task_queue.put({"task_id": i, "payload": i})
 
     results = []
@@ -115,7 +290,6 @@ def run_master():
     for r in sorted(results, key=lambda x: x["task_id"]):
         print(f"  Task {r['task_id']}: {r['result']}")
 
-    server.close()
+    print(f"Tasks completed succesfully: {len(results)} / {amount_of_tasks}")
 
-if __name__ == "__main__":
-    run_master()
+    server.close()
