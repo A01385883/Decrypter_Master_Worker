@@ -1,99 +1,122 @@
 """
-Worker cliente para el descifrado de clave HMAC-MD5.
-Se conecta al Master, procesa los bloques de búsqueda asignados convirtiendo
-adecuadamente las secuencias hex a bytes y retorna las respuestas mediante ACK.
+Worker.py - Cliente de procesamiento para fuerza bruta RIPv2 RFC 2082.
+Mide el tiempo de resolución por tarea y calcula el rendimiento individual
+en Hashes por segundo (H/s) enviado en la respuesta ACK al Master.
+
+Uso:
+    python Worker.py --host <IP_MASTER> --port 5000
 """
 
+import argparse
 import hashlib
-import hmac
 import json
 import socket
-import argparse
+import string
+import time
+from typing import Any
 
-
-ALFABETO = "0123456789abcdefghijklmnopqrstuvwxyz"
+ALFABETO = string.ascii_lowercase + string.digits
 BASE = len(ALFABETO)
 
 
-def calcular_hash_hmac(mensaje_bytes: bytes, clave_bytes: bytes) -> str:
-    """Calcula el hash HMAC-MD5 para un mensaje y clave dados."""
-    return hmac.new(clave_bytes, mensaje_bytes, hashlib.md5).hexdigest()
+def send_message(sock: socket.socket, obj: Any) -> None:
+    sock.sendall((json.dumps(obj) + "\n").encode("utf-8"))
 
 
-def indice_a_clave(n: int) -> str:
-    """
-    Convierte un entero n (0..N-1) a su clave correspondiente de 1 a 6 caracteres.
-    """
-    for longitud in range(1, 7):
-        combinaciones = BASE ** longitud
-        if n < combinaciones:
-            res = []
-            for _ in range(longitud):
-                res.append(ALFABETO[n % BASE])
-                n //= BASE
-            print(("0" * (8 - len(res))) + "".join(reversed(res)))
-            return ("0" * (8 - len(res))) + "".join(reversed(res))
-        n -= combinaciones
-    raise ValueError("Índice fuera de rango")
+def recv_message(sock: socket.socket) -> Any | None:
+    data = b""
+    while not data.endswith(b"\n"):
+        chunk = sock.recv(4096)
+        if not chunk:
+            return None
+        data += chunk
+    return json.loads(data.decode("utf-8"))
 
 
-def procesar_tarea(mensaje_rip_bytes: bytes, hash_real: str, inicio: int, fin: int) -> str | None:
-    """Busca por fuerza bruta la clave HMAC probando el rango numérico asignado."""
+def int_a_string_ascii(num: int, length: int) -> str:
+    res = []
+    for _ in range(length):
+        res.append(ALFABETO[num % BASE])
+        num //= BASE
+    return "".join(reversed(res))
+
+
+def calcular_hash_rfc2082(mensaje_bytes: bytes, clave_bytes: bytes) -> str:
+    clave_padded = clave_bytes.ljust(16, b"\x00")
+    buffer_completo = mensaje_bytes + clave_padded  # mensaje + clave, NO clave+mensaje+clave
+    return hashlib.md5(buffer_completo).hexdigest()
+
+
+def procesar_tarea(mensaje_rip_bytes: bytes, hash_real: str, inicio: int, fin: int, key_length: int) -> str | None:
     for num in range(inicio, fin):
-        hex_str = indice_a_clave(num).encode('utf-8').hex()
-        clave_bytes = bytes.fromhex(hex_str)
-        hash_calculado = calcular_hash_hmac(mensaje_rip_bytes, clave_bytes)
-
-        if hash_real == hash_calculado:
-            return hex_str
-
+        clave_str = int_a_string_ascii(num, key_length)
+        clave_bytes = clave_str.encode("utf-8")
+        if calcular_hash_rfc2082(mensaje_rip_bytes, clave_bytes) == hash_real:
+            return clave_str
     return None
 
 
-def iniciar_worker() -> None:
-    """Mantiene la conexión activa con el Master procesando bloques de tareas recibidos."""
-    parser = argparse.ArgumentParser(description="Worker node: processes tasks from the master")
-    parser.add_argument("--host", required=True, help="Master's IP address")
-    parser.add_argument("--port", type=int, default=5000, help="Master's port (default: 5000)")
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Worker RFC 2082 con Métricas H/s")
+    parser.add_argument("--host", required=True, help="IP del Master")
+    parser.add_argument("--port", type=int, default=5000, help="Puerto (default: 5000)")
     args = parser.parse_args()
 
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as cliente:
-            print(f"[WORKER] Connecting to master at {args.host}:{args.port} ...")
+            print(f"[WORKER] Conectando al Master en {args.host}:{args.port}...")
             cliente.connect((args.host, args.port))
-            print("[WORKER] Conectado al Master.")
+            print("[WORKER] Conectado exitosamente. En espera de tareas...")
 
             while True:
-                data = cliente.recv(4096)
-                if not data:
-                    print("[WORKER] El Master cerró la conexión.")
+                datos = recv_message(cliente)
+                if datos is None or datos.get("cmd") == "done":
+                    print("[WORKER] El Master finalizó la sesión o no hay más tareas.")
                     break
 
-                datos = json.loads(data.decode('utf-8'))
                 id_tarea = datos["id_tarea"]
                 mensaje_rip_bytes = bytes.fromhex(datos["mensaje"])
                 hash_real = datos["hash"]
                 inicio = datos["inicio"]
                 fin = datos["fin"]
+                key_length = datos.get("key_length", 6)
 
-                print(f"[WORKER] Procesando Tarea #{id_tarea} (Rango: {inicio} a {fin})")
+                total_evaluaciones = fin - inicio
+                print(f"[WORKER] Procesando Tarea #{id_tarea} (Rango: {inicio} a {fin} | {total_evaluaciones:,} iteraciones)")
 
-                res = procesar_tarea(mensaje_rip_bytes, hash_real, inicio, fin)
+                # Medición de tiempo por tarea
+                t_inicio = time.time()
+                res = procesar_tarea(mensaje_rip_bytes, hash_real, inicio, fin, key_length)
+                t_transcurrido = time.time() - t_inicio
 
-                respuesta = json.dumps({"id_tarea": id_tarea, "resultado": res})
-                cliente.sendall(respuesta.encode('utf-8'))
+                # Cálculo de Hashes por Segundo (H/s) Individuales
+                rate_individual = total_evaluaciones / t_transcurrido if t_transcurrido > 0 else 0.0
+
+                print(
+                    f"[WORKER] Tarea #{id_tarea} finalizada en {t_transcurrido:.2f}s "
+                    f"| Rendimiento Individual: {rate_individual:,.0f} H/s"
+                )
+
+                # Enviar respuesta con métricas al Master
+                send_message(
+                    cliente,
+                    {
+                        "id_tarea": id_tarea,
+                        "resultado": res,
+                        "tiempo_segundos": t_transcurrido,
+                        "hashes_por_segundo": rate_individual,
+                    },
+                )
 
                 if res is not None:
-                    print(f"[WORKER] ¡Clave encontrada en la Tarea #{id_tarea}!")
+                    print(f"\n[WORKER] ¡CLAVE HALLADA en Tarea #{id_tarea}: '{res}'!")
                     break
 
     except ConnectionRefusedError:
-        print("[WORKER] Error: No se pudo conectar al Master. Asegúrate de que está escuchando.")
+        print("[WORKER] Error: No se pudo conectar al Master. Revisa la IP y puerto.")
     except Exception as e:
-        print(f"[WORKER] Ocurrió un error insospechado: {e}")
-    finally:
-        print("[WORKER] Conexión y ejecución finalizadas.")
+        print(f"[WORKER] Error en ejecución: {e}")
 
 
 if __name__ == "__main__":
-    iniciar_worker()
+    main()
