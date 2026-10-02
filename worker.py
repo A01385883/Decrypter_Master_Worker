@@ -11,15 +11,36 @@ import socket
 import argparse
 
 
+ALFABETO = "0123456789abcdefghijklmnopqrstuvwxyz"
+BASE = len(ALFABETO)
+
+
 def calcular_hash_hmac(mensaje_bytes: bytes, clave_bytes: bytes) -> str:
     """Calcula el hash HMAC-MD5 para un mensaje y clave dados."""
     return hmac.new(clave_bytes, mensaje_bytes, hashlib.md5).hexdigest()
 
 
+def indice_a_clave(n: int) -> str:
+    """
+    Convierte un entero n (0..N-1) a su clave correspondiente de 1 a 6 caracteres.
+    """
+    for longitud in range(1, 7):
+        combinaciones = BASE ** longitud
+        if n < combinaciones:
+            res = []
+            for _ in range(longitud):
+                res.append(ALFABETO[n % BASE])
+                n //= BASE
+            print(("0" * (8 - len(res))) + "".join(reversed(res)))
+            return ("0" * (8 - len(res))) + "".join(reversed(res))
+        n -= combinaciones
+    raise ValueError("Índice fuera de rango")
+
+
 def procesar_tarea(mensaje_rip_bytes: bytes, hash_real: str, inicio: int, fin: int) -> str | None:
     """Busca por fuerza bruta la clave HMAC probando el rango numérico asignado."""
     for num in range(inicio, fin):
-        hex_str = f"{num:06x}"
+        hex_str = indice_a_clave(num).encode('utf-8').hex()
         clave_bytes = bytes.fromhex(hex_str)
         hash_calculado = calcular_hash_hmac(mensaje_rip_bytes, clave_bytes)
 

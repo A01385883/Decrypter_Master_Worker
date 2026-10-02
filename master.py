@@ -14,12 +14,31 @@ import time
 import argparse
 
 
+ALFABETO = "0123456789abcdefghijklmnopqrstuvwxyz"
+BASE = len(ALFABETO)
 TIMEOUT_TAREA_SEGUNDOS = 30.0
 
 
 def calcular_hash_hmac(mensaje_bytes: bytes, clave_bytes: bytes) -> str:
     """Calcula el hash HMAC-MD5 para un mensaje y clave dados."""
     return hmac.new(clave_bytes, mensaje_bytes, hashlib.md5).hexdigest()
+
+
+def indice_a_clave(n: int) -> str:
+    """
+    Convierte un entero n (0..N-1) a su clave correspondiente de 1 a 6 caracteres.
+    """
+    for longitud in range(1, 7):
+        combinaciones = BASE ** longitud
+        if n < combinaciones:
+            res = []
+            for _ in range(longitud):
+                res.append(ALFABETO[n % BASE])
+                n //= BASE
+            print(("0" * (8 - len(res))) + "".join(reversed(res))) 
+            return ("0" * (8 - len(res))) + "".join(reversed(res))
+        n -= combinaciones
+    raise ValueError("Índice fuera de rango")
 
 
 def generar_cola_tareas(total_combinaciones: int, num_bloques: int) -> queue.Queue:
@@ -38,7 +57,7 @@ def procesar_tarea_local(mensaje_rip_bytes: bytes, hash_real: str, inicio: int, 
     for num in range(inicio, fin):
         if evento_hallado.is_set():
             return None
-        hex_str = f"{num:06x}"
+        hex_str = indice_a_clave(num).encode('utf-8').hex()
         clave_bytes = bytes.fromhex(hex_str)
         if calcular_hash_hmac(mensaje_rip_bytes, clave_bytes) == hash_real:
             return hex_str
@@ -177,17 +196,18 @@ def supervisor_tareas(
 def iniciar_master() -> None:
     """Inicializa datos, configura la red y coordina los trabajadores locales y remotos."""
     mensaje_rip = bytes.fromhex(
-        "0202080048be7402020000ffff0003002c011400000000000000000000000200000a000100ffffff000000000000000001"
+        # "0202080048be7402020000ffff0003002c011400000000000000000000000200000a000100ffffff000000000000000001"
+        "02020000ffff0003002c0114000000000000000000000000000200000a000100ffffff000000000000000001"
     )
-    clave_temporal = bytes.fromhex("a1b2c3")
-    hash_real = calcular_hash_hmac(mensaje_rip, clave_temporal)
+    # clave_temporal = bytes.fromhex("a1b2c3")
+    hash_real = "08ad938c3089d26469afc311d482008c" # calcular_hash_hmac(mensaje_rip, clave_temporal)
 
     parser = argparse.ArgumentParser(description="Master node: distributes tasks to workers")
     parser.add_argument("--host", default="0.0.0.0", help="Interface to bind on (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=5000, help="Port to listen on (default: 5000)")
     args = parser.parse_args()
 
-    total_combinaciones = 16**6
+    total_combinaciones = 32**6
     num_bloques = 12
     cola_tareas = generar_cola_tareas(total_combinaciones, num_bloques)
 
