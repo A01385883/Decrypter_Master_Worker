@@ -26,8 +26,9 @@ BASE = len(ALFABETO)
 PCAPS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pcaps")
 
 
+# --- Localización del PCAP por longitud e identificador ---
 def resolver_ruta_pcap(key_length: int, identificador: int) -> str:
-    """Resuelve la ruta del archivo PCAP siguiendo el formato rip_passkey_size_xx_yy.pcap."""
+    """Construye la ruta del PCAP en la carpeta pcaps según el formato esperado."""
     if key_length <= 0:
         raise ValueError("La longitud de clave debe ser mayor que cero.")
     if identificador < 0:
@@ -43,6 +44,7 @@ def resolver_ruta_pcap(key_length: int, identificador: int) -> str:
         )
 
     return ruta
+
 
 # PARSER DINÁMICO DE CAPTURAS PCAP (ETHERNET / IP / UDP)
 
@@ -306,6 +308,7 @@ def supervisor_tareas(
     evento_hallado: threading.Event,
     timeout_segundos: float,
 ) -> None:
+    """Reencola tareas expiradas para evitar que un worker lento bloquee toda la búsqueda."""
     while not evento_hallado.is_set():
         time.sleep(2.0)
         ahora = time.time()
@@ -323,9 +326,10 @@ def supervisor_tareas(
         if cola_tareas.empty() and not tareas_en_progreso:
             break
 
-# MAIN
 
-def main() -> None:
+# --- Configuración y arranque del sistema ---
+def parse_args() -> argparse.Namespace:
+    """Lee los argumentos de línea de comandos usados por el Master."""
     parser = argparse.ArgumentParser(description="Master HMAC RFC 2082 con Métricas de Rendimiento")
     parser.add_argument("--key-length", "-l", type=int, required=True, help="Longitud de clave ASCII (obligatorio)")
     parser.add_argument("--id", type=int, required=True, help="Identificador del archivo PCAP: formato rip_passkey_size_xx_yy.pcap")
@@ -333,57 +337,76 @@ def main() -> None:
     parser.add_argument("--host", default="0.0.0.0", help="Interfaz de escucha")
     parser.add_argument("--port", type=int, default=5000, help="Puerto de escucha")
     parser.add_argument("--timeout", type=float, default=60.0, help="Timeout por tarea (s)")
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    ruta_pcap = resolver_ruta_pcap(args.key_length, args.id)
-    print(f"[MASTER] Leyendo archivo PCAP: '{ruta_pcap}'...")
-    mensaje_rip, hash_real = extraer_datos_rip_pcap(ruta_pcap)
 
-    total_combinaciones = BASE ** args.key_length
-    print(f"[MASTER] Alfabeto: letras minúsculas (a-z) + números (0-9) [{BASE} caracteres]")
-    print(f"[MASTER] Longitud de clave: {args.key_length} caracteres")
-    print(f"[MASTER] Espacio total de búsqueda: {total_combinaciones:,} combinaciones")
-
-    ip_lan = obtener_ip_local()
-    print("\n" + "=" * 65)
-    print(f"[INFO WORKER] Comando para conectar los workers:")
-    print(f"             python worker.py --host {ip_lan} --port {args.port}")
-    print("=" * 65 + "\n")
-
+def preparar_servidor(host: str, port: int) -> socket.socket:
+    """Crea y levanta el socket TCP de escucha del Master."""
     servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     servidor.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    servidor.bind((args.host, args.port))
+    servidor.bind((host, port))
     servidor.listen(5)
+    return servidor
 
-    print(f"[MASTER] Iniciando la búsqueda inmediatamente; los workers pueden conectarse en cualquier momento.")
 
-    cola_tareas = generar_cola_tareas(total_combinaciones, args.num_bloques)
+def crear_estado_busqueda(total_combinaciones: int, num_bloques: int) -> Tuple[queue.Queue, Dict[int, Tuple[dict, float]], threading.Lock, threading.Event, dict, dict]:
+    """Inicializa la cola, locks y estructuras de control de la búsqueda distribuida."""
+    cola_tareas = generar_cola_tareas(total_combinaciones, num_bloques)
     tareas_en_progreso: Dict[int, Tuple[dict, float]] = {}
     lock_tareas = threading.Lock()
     evento_hallado = threading.Event()
     resultados = {"clave": None}
-
-    # Métricas globales de procesamiento
     estadisticas = {"total_hashes": 0, "tiempo_acumulado": 0.0}
+    return cola_tareas, tareas_en_progreso, lock_tareas, evento_hallado, resultados, estadisticas
 
+
+def iniciar_hilos_busqueda(
+    mensaje_rip: bytes,
+    hash_real: str,
+    key_length: int,
+    cola_tareas: queue.Queue,
+    tareas_en_progreso: Dict[int, Tuple[dict, float]],
+    lock_tareas: threading.Lock,
+    evento_hallado: threading.Event,
+    resultados: dict,
+    estadisticas: dict,
+    timeout_segundos: float,
+) -> List[threading.Thread]:
+    """Levanta los hilos del supervisor y del master local para empezar la búsqueda."""
     hilos: List[threading.Thread] = []
 
     hilo_supervisor = threading.Thread(
         target=supervisor_tareas,
-        args=(cola_tareas, tareas_en_progreso, lock_tareas, evento_hallado, args.timeout),
+        args=(cola_tareas, tareas_en_progreso, lock_tareas, evento_hallado, timeout_segundos),
         daemon=True,
     )
     hilo_supervisor.start()
-
-    t_inicio_global = time.time()
+    hilos.append(hilo_supervisor)
 
     hilo_master_local = threading.Thread(
         target=worker_local_master,
-        args=(mensaje_rip, hash_real, args.key_length, cola_tareas, tareas_en_progreso, lock_tareas, evento_hallado, resultados, estadisticas),
+        args=(mensaje_rip, hash_real, key_length, cola_tareas, tareas_en_progreso, lock_tareas, evento_hallado, resultados, estadisticas),
     )
     hilo_master_local.start()
     hilos.append(hilo_master_local)
 
+    return hilos
+
+
+def aceptar_workers_dinamicos(
+    servidor: socket.socket,
+    mensaje_rip_hex: str,
+    hash_real: str,
+    key_length: int,
+    cola_tareas: queue.Queue,
+    tareas_en_progreso: Dict[int, Tuple[dict, float]],
+    lock_tareas: threading.Lock,
+    evento_hallado: threading.Event,
+    resultados: dict,
+    estadisticas: dict,
+    hilos: List[threading.Thread],
+) -> None:
+    """Escucha conexiones entrantes y crea un hilo por cada worker que se conecta."""
     servidor.settimeout(1.0)
     try:
         while not evento_hallado.is_set():
@@ -398,9 +421,9 @@ def main() -> None:
                     args=(
                         conn,
                         addr,
-                        mensaje_rip.hex(),
+                        mensaje_rip_hex,
                         hash_real,
-                        args.key_length,
+                        key_length,
                         cola_tareas,
                         tareas_en_progreso,
                         lock_tareas,
@@ -415,10 +438,10 @@ def main() -> None:
                 continue
     finally:
         servidor.close()
-        for hilo in hilos:
-            hilo.join()
 
-    tiempo_total = time.time() - t_inicio_global
+
+def imprimir_resumen(tiempo_total: float, resultados: dict, estadisticas: dict) -> None:
+    """Muestra el estado final de la ejecución y las métricas colectivas."""
     clave_final = resultados["clave"]
 
     print("\n" + "=" * 65)
@@ -436,6 +459,67 @@ def main() -> None:
     print(f"Hashes evaluados totales:     {hashes_evaluados:,}")
     print(f"Rendimiento Colectivo Red:    {rate_colectivo:,.0f} H/s (Hashes/segundo)")
     print("=" * 65)
+
+
+# MAIN
+
+def main() -> None:
+    args = parse_args()
+    ruta_pcap = resolver_ruta_pcap(args.key_length, args.id)
+    print(f"[MASTER] Leyendo archivo PCAP: '{ruta_pcap}'...")
+    mensaje_rip, hash_real = extraer_datos_rip_pcap(ruta_pcap)
+
+    total_combinaciones = BASE ** args.key_length
+    print(f"[MASTER] Alfabeto: letras minúsculas (a-z) + números (0-9) [{BASE} caracteres]")
+    print(f"[MASTER] Longitud de clave: {args.key_length} caracteres")
+    print(f"[MASTER] Espacio total de búsqueda: {total_combinaciones:,} combinaciones")
+
+    ip_lan = obtener_ip_local()
+    print("\n" + "=" * 65)
+    print(f"[INFO WORKER] Comando para conectar los workers:")
+    print(f"             python worker.py --host {ip_lan} --port {args.port}")
+    print("=" * 65 + "\n")
+
+    servidor = preparar_servidor(args.host, args.port)
+    print("[MASTER] Iniciando la búsqueda inmediatamente; los workers pueden conectarse en cualquier momento.")
+
+    cola_tareas, tareas_en_progreso, lock_tareas, evento_hallado, resultados, estadisticas = crear_estado_busqueda(
+        total_combinaciones, args.num_bloques
+    )
+
+    hilos = iniciar_hilos_busqueda(
+        mensaje_rip,
+        hash_real,
+        args.key_length,
+        cola_tareas,
+        tareas_en_progreso,
+        lock_tareas,
+        evento_hallado,
+        resultados,
+        estadisticas,
+        args.timeout,
+    )
+
+    t_inicio_global = time.time()
+    aceptar_workers_dinamicos(
+        servidor,
+        mensaje_rip.hex(),
+        hash_real,
+        args.key_length,
+        cola_tareas,
+        tareas_en_progreso,
+        lock_tareas,
+        evento_hallado,
+        resultados,
+        estadisticas,
+        hilos,
+    )
+
+    tiempo_total = time.time() - t_inicio_global
+    for hilo in hilos:
+        hilo.join()
+
+    imprimir_resumen(tiempo_total, resultados, estadisticas)
 
 
 if __name__ == "__main__":
