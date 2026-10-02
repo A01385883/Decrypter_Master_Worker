@@ -19,18 +19,15 @@ import threading
 import time
 from typing import Any, Dict, List, Tuple
 
-# ==============================================================================
 # CONFIGURACIÓN GENERAL Y ALFABETO ASCII
-# ==============================================================================
+
 ARCHIVO_PCAP = "rip_passkey_size_07_03.pcap"
 ALFABETO = string.ascii_lowercase + string.digits  # 36 caracteres ('a-z', '0-9')
 BASE = len(ALFABETO)
 WORKERS_REQUERIDOS = 2
 
+# PARSER DINÁMICO DE CAPTURAS PCAP (ETHERNET / IP / UDP)
 
-# ==============================================================================
-# 1. PARSER DINÁMICO DE CAPTURAS PCAP (ETHERNET / IP / UDP)
-# ==============================================================================
 def extraer_datos_rip_pcap(filepath: str) -> Tuple[bytes, str]:
     """Lee un PCAP extrayendo el mensaje RIPv2 y los 16 bytes finales del digest."""
     if not os.path.exists(filepath):
@@ -82,10 +79,8 @@ def extraer_datos_rip_pcap(filepath: str) -> Tuple[bytes, str]:
 
     raise ValueError("No se pudo localizar una trama RIPv2 MD5 válida en el archivo.")
 
+# FUNCIONES MATEMÁTICAS, RED Y ALGORITMO RFC 2082
 
-# ==============================================================================
-# 2. FUNCIONES MATEMÁTICAS, RED Y ALGORITMO RFC 2082
-# ==============================================================================
 def obtener_ip_local() -> str:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -310,10 +305,8 @@ def supervisor_tareas(
         if cola_tareas.empty() and not tareas_en_progreso:
             break
 
+# MAIN
 
-# ==============================================================================
-# 3. MAIN
-# ==============================================================================
 def main() -> None:
     parser = argparse.ArgumentParser(description="Master HMAC RFC 2082 con Métricas de Rendimiento")
     parser.add_argument("--key-length", "-l", type=int, default=6, help="Longitud de clave ASCII")
